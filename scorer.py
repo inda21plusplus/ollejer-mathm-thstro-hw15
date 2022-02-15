@@ -1,20 +1,17 @@
 import sys
 
-pizza = open(sys.argv[1])
-pizza = pizza.read()
-ingredients = pizza.split()[1:]
-points = 0
-customers = int(input())
+pizza = input().split()[1:]
+with open(sys.argv[1]) as f:
+    lines = f.read().split("\n")
 
-for _ in range(customers):
+points = 0
+for likes, dislikes in zip(lines[1::2], lines[2::2]):
     pizza_ok = True
-    likes = input().split()[1:]
-    dislikes = input().split()[1:]
-    for topping in likes:
-        if not topping in ingredients:
+    for topping in likes.split()[1:]:
+        if not topping in pizza:
             pizza_ok = False
-    for topping in dislikes:
-        if topping in ingredients:
+    for topping in dislikes.split()[1:]:
+        if topping in pizza:
             pizza_ok = False
     if pizza_ok:
         points += 1
