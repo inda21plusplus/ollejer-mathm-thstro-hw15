@@ -7,14 +7,14 @@ use std::{
 use signal_hook::{consts::SIGINT, iterator::Signals};
 
 #[derive(Debug, Clone)]
-struct Ingredient<'i> {
+pub struct Ingredient<'i> {
     name: &'i str,
     likers: Vec<usize>,
     haters: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
-struct Input<'i> {
+pub struct Input<'i> {
     ings: Vec<Ingredient<'i>>,
     clients: Vec<[Vec<usize>; 2]>,
 }
@@ -84,6 +84,18 @@ impl<'i> Input<'i> {
     }
 }
 
+fn parse_pizza(input: &Input, pizza: &str) -> Pizza {
+    let mut res = Pizza::new();
+    for i in pizza.split(' ').skip(1) {
+        for (index, ing) in input.ings.iter().enumerate() {
+            if ing.name == i {
+                res.insert(index);
+            }
+        }
+    }
+    res
+}
+
 fn bake_pizza<'i>(input: &Input<'i>) -> Pizza {
     let mut pizza = HashSet::new();
     let mut scores: Vec<isize> = input
@@ -118,19 +130,207 @@ fn bake_pizza<'i>(input: &Input<'i>) -> Pizza {
     }
 }
 
-fn season_pizza(
+fn do_change(
     input: &Input,
-    mut pizza: Pizza,
-    mut happy: Vec<bool>,
-) -> (Pizza, Vec<bool>, isize, bool) {
+    pizza: &mut Pizza,
+    happy: &mut [bool],
+    i: usize,
+) -> (Vec<(usize, bool)>, isize) {
+    let mut toggled = vec![];
+    let mut delta = 0isize;
+    if pizza.insert(i) {
+        for &liker in &input.ings[i].likers {
+            if happy[liker] {
+                continue;
+            }
+            let mut nvm = false;
+            for like in &input.clients[liker][0] {
+                if !pizza.contains(like) {
+                    nvm = true;
+                    break;
+                }
+            }
+            for dislike in &input.clients[liker][1] {
+                if pizza.contains(dislike) {
+                    nvm = true;
+                    break;
+                }
+            }
+            if !nvm {
+                // eprintln!("gaining liker: {}", liker,);
+                happy[liker] = true;
+                toggled.push((liker, false));
+                delta += 1;
+            }
+        }
+        for &hater in &input.ings[i].haters {
+            if !happy[hater] {
+                continue;
+            }
+            // eprintln!("losing hater: {}", hater,);
+            happy[hater] = false;
+            toggled.push((hater, true));
+            delta -= 1;
+        }
+    } else {
+        // eprintln!("removing {}", ing.name);
+        pizza.remove(&i);
+
+        for &hater in &input.ings[i].haters {
+            if happy[hater] {
+                continue;
+            }
+            let mut nvm = false;
+            for like in &input.clients[hater][0] {
+                if !pizza.contains(like) {
+                    nvm = true;
+                    break;
+                }
+            }
+            for dislike in &input.clients[hater][1] {
+                if pizza.contains(dislike) {
+                    nvm = true;
+                    break;
+                }
+            }
+            if !nvm {
+                // eprintln!("gaining hater: {}", hater,);
+                happy[hater] = true;
+                toggled.push((hater, false));
+                delta += 1;
+            }
+        }
+        for &liker in &input.ings[i].likers {
+            if !happy[liker] {
+                continue;
+            }
+            // eprintln!("losing liker: {}", liker,);
+            happy[liker] = false;
+            toggled.push((liker, true));
+            delta -= 1;
+        }
+    }
+    (toggled, delta)
+}
+
+fn spice_pizza(input: &Input, pizza: &mut Pizza, happy: &mut [bool]) -> isize {
+    let mut best_delta = isize::MIN;
+    let mut best_ing = (0, 0, 0);
+    let indices = |n| {
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+        let mut is = (0..n).collect::<Vec<usize>>();
+        is.shuffle(&mut thread_rng());
+        is
+    };
+    for i in indices(input.ings.len()) {
+        let (t1, d1) = do_change(input, pizza, happy, i);
+        for j in indices(input.ings.len()) {
+            if i == j {
+                continue;
+            }
+            let (t2, d2) = do_change(input, pizza, happy, j);
+            for k in indices(input.ings.len()) {
+                if i == k || j == k {
+                    continue;
+                }
+                let (t3, d3) = do_change(input, pizza, happy, k);
+
+                let new_delta = d1 + d2 + d3;
+                if new_delta > best_delta || new_delta == best_delta && rand::random() {
+                    best_delta = new_delta;
+                    best_ing = (i, j, k);
+                }
+
+                if !pizza.insert(k) {
+                    pizza.remove(&k);
+                }
+                for (t, v) in t3 {
+                    happy[t] = v;
+                }
+            }
+
+            if !pizza.insert(j) {
+                pizza.remove(&j);
+            }
+            for (t, v) in t2 {
+                happy[t] = v;
+            }
+        }
+        if !pizza.insert(i) {
+            pizza.remove(&i);
+        }
+        for (t, v) in t1 {
+            happy[t] = v;
+        }
+    }
+    let (_, d1) = do_change(input, pizza, happy, best_ing.0);
+    let (_, d2) = do_change(input, pizza, happy, best_ing.1);
+    let (_, d3) = do_change(input, pizza, happy, best_ing.2);
+    assert_eq!(best_delta, d1 + d2 + d3);
+
+    d1 + d2
+}
+
+fn krydda_pizza(input: &Input, pizza: &mut Pizza, happy: &mut Vec<bool>) -> isize {
+    let mut best_score = isize::MIN;
+    let mut best_ing: isize = -1;
+    let mut dont_hate_it: Vec<bool> = vec![true; input.clients.len()];
+    for ingredient in &*pizza {
+        for (p_idx, p) in dont_hate_it.iter_mut().enumerate() {
+            if input.clients[p_idx][1].contains(ingredient) {
+                *p = false;
+            }
+        }
+    }
+
+    for (i, _ing) in input
+        .ings
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !pizza.contains(i))
+    {
+        let (base, score) = improvability::score(input, &*pizza, &dont_hate_it[..], i);
+
+        if base > 0 && score > best_score {
+            best_score = score;
+            best_ing = i as isize;
+        }
+    }
+    if best_ing < 0 {
+        0
+    } else {
+        let (_, delta) = do_change(input, pizza, happy, best_ing as usize);
+
+        delta
+    }
+}
+
+mod improvability;
+
+fn season_pizza(input: &Input, pizza: &mut Pizza, happy: &mut [bool]) -> isize {
     let mut total_delta = 0;
-    let mut found_any_change = false;
+
+    let mut best_score = (0, isize::MIN);
+
+    for (i, ing) in input
+        .ings
+        .iter()
+        .enumerate()
+        .filter(|(x, _)| !pizza.contains(x))
+    {
+        let (base, score) = improvability::score(input, &pizza, &happy[..], i);
+        if best_score.1 < score {
+            best_score = (i, score);
+        }
+    }
+
     for (i, ing) in input.ings.iter().enumerate() {
         if rand::random::<usize>() < usize::MAX / 2 {
             continue;
         }
-        let mut toggled = vec![];
         let mut delta = 0isize;
+        let mut toggled = vec![];
         // let pre_score = taste_pizza(&input, &pizza) as isize;
         if pizza.insert(i) {
             // eprintln!("adding {}", ing.name);
@@ -155,7 +355,7 @@ fn season_pizza(
                 if !nvm {
                     // eprintln!("gaining liker: {}", liker,);
                     happy[liker] = true;
-                    toggled.push(liker);
+                    toggled.push((liker, false));
                     delta += 1;
                 }
             }
@@ -165,7 +365,7 @@ fn season_pizza(
                 }
                 // eprintln!("losing hater: {}", hater,);
                 happy[hater] = false;
-                toggled.push(hater);
+                toggled.push((hater, true));
                 delta -= 1;
             }
         } else {
@@ -192,7 +392,7 @@ fn season_pizza(
                 if !nvm {
                     // eprintln!("gaining hater: {}", hater,);
                     happy[hater] = true;
-                    toggled.push(hater);
+                    toggled.push((hater, false));
                     delta += 1;
                 }
             }
@@ -202,7 +402,7 @@ fn season_pizza(
                 }
                 // eprintln!("losing liker: {}", liker,);
                 happy[liker] = false;
-                toggled.push(liker);
+                toggled.push((liker, true));
                 delta -= 1;
             }
         }
@@ -211,19 +411,30 @@ fn season_pizza(
         } else {
             delta >= 0
         };
+
+        if do_commit && (i != best_score.0) {
+            println!(
+                "chose ingredient {i} with score {i_score}, best according to heuristic \
+                      was {best} with {best_score}",
+                i = i,
+                i_score = improvability::score(input, &pizza, &happy[..], i).1,
+                best = best_score.0,
+                best_score = best_score.1
+            );
+        }
+
         if do_commit {
             total_delta += delta;
-            found_any_change = true;
         } else {
             if !pizza.insert(i) {
                 pizza.remove(&i);
             }
-            for t in toggled.drain(..) {
-                happy[t] = !happy[t];
+            for (t, v) in toggled.drain(..) {
+                happy[t] = v;
             }
         }
     }
-    (pizza, happy, total_delta, found_any_change)
+    total_delta
 }
 
 fn happy_customers(input: &Input, pizza: &Pizza) -> Vec<bool> {
@@ -259,26 +470,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     stdin().lock().read_to_string(&mut s)?;
     let input = Input::parse(&s);
 
-    let mut pizza = bake_pizza(&input);
+    // let mut pizza = bake_pizza(&input);
+    // let mut pizza: Pizza = (0..input.ings.len()).filter(|_| rand::random()).collect();
+    let mut pizza = parse_pizza(&input, include_str!("../outputs/5/d"));
     let mut happy = happy_customers(&input, &pizza);
     let mut score = happy.iter().filter(|&&b| b).count() as isize;
     let mut zeros = 0;
 
+    eprintln!("Initial score: {}", score);
+
     let mut signals = Signals::new(&[SIGINT])?;
     loop {
-        let (p, h, delta, any_change) = season_pizza(&input, pizza, happy);
-        pizza = p;
-        happy = h;
+        let delta = spice_pizza(&input, &mut pizza, &mut happy);
         score += delta;
-        if !any_change {
-            break;
-        }
 
-        if delta == 0 {
+        if delta <= 0 {
             zeros += 1;
-            if zeros % 100 == 0 {
+            if zeros % 1 == 0 {
                 eprint!(
-                    "\r Ctrl+C to exit and print pizza ({}) {}   ",
+                    "\rCtrl+C to exit and print pizza ({}) {}\r",
                     zeros,
                     ".".repeat(1 + (zeros / 100) % 3),
                 );
@@ -287,7 +497,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             }
         } else {
-            eprintln!("\r({}) Score: {}", zeros, score);
+            eprintln!(
+                "\r                                            \r({}) Score: {}",
+                zeros, score
+            );
             zeros = 0;
         }
     }
